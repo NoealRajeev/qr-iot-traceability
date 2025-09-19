@@ -1,111 +1,220 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import TempChart from '@/components/TempChart'; // Adjust path if needed
+import { useEffect, useMemo, useRef, useState } from "react";
 
-// We define the types here to avoid importing server-side code (Prisma)
-interface LotData {
-  id: string;
-  product: string;
-  exp: string;
-  score: { freshness: string; breaches: number } | null;
-  events: { id: string; type: string; labelOk: boolean | null; photoUrl: string | null; ts: string }[];
-  telemetry: { id: string; kind: string; temp: number | null; hum: number | null; ts: string }[];
+async function fetchLot(lotId: string) {
+  const r = await fetch(`/api/lot/${lotId}`, { cache: "no-store" });
+  return r.json();
 }
 
-const getScoreColor = (score: string) => {
-  // same as public page
-  switch (score) {
-    case 'A': return 'bg-green-500';
-    case 'B': return 'bg-yellow-400';
-    case 'C': return 'bg-orange-500';
-    case 'D': return 'bg-red-500';
-    case 'E': return 'bg-red-700 text-white';
-    default: return 'bg-gray-400';
-  }
-};
+export default function Dashboard({ params }: { params: { lotId: string } }) {
+  const { lotId } = params;
+  const [data, setData] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<any>(null);
+  const sim = useRef<any>(null);
 
-// We need a simple API route to fetch data for this client component
-// Create this in `app/api/dashboard/[lotId]/route.ts` next
-async function fetchLotData(lotId: string): Promise<LotData | null> {
-    const res = await fetch(`/api/dashboard/${lotId}`);
-    if (!res.ok) return null;
-    return res.json();
-}
+  const capture = async () => {
+    setBusy(true);
+    await fetch(`/api/capture`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lotId,
+        pir: 1,
+        dist: (Math.random() * 5 + 8).toFixed(1),
+      }),
+    });
+    setBusy(false);
+    // poll once after a moment to show the image
+    setTimeout(load, 1200);
+  };
 
-export default function DashboardPage({ params }: { params: { lotId: string } }) {
-  const [lot, setLot] = useState<LotData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const load = async () => {
+    const d = await fetchLot(lotId);
+    setData(d);
+  };
 
+  // live refresh
   useEffect(() => {
-    const loadData = () => {
-      fetchLotData(params.lotId).then(data => {
-        setLot(data);
-        setIsLoading(false);
+    load();
+    timer.current = setInterval(load, 4000);
+    return () => clearInterval(timer.current);
+  }, [lotId]);
+
+  // very light telemetry simulator (mimics NodeMCU shapes)
+  useEffect(() => {
+    sim.current = setInterval(async () => {
+      // env
+      const baseT = 26,
+        baseH = 60;
+      const envT = +(baseT + (Math.random() * 2 - 1)).toFixed(1);
+      const envH = +(baseH + (Math.random() * 5 - 2.5)).toFixed(1);
+      await fetch("/api/telemetry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lotId,
+          type: "line_env",
+          temp: envT,
+          hum: envH,
+        }),
       });
-    };
-    
-    loadData();
-    const interval = setInterval(loadData, 5000); // Poll for new data every 5 seconds
+      // cold
+      const coldBase = 5.0 + (Math.random() * 0.8 - 0.4);
+      await fetch("/api/telemetry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lotId,
+          type: "cold",
+          temp: +coldBase.toFixed(1),
+        }),
+      });
+    }, 5000);
+    return () => clearInterval(sim.current);
+  }, [lotId]);
 
-    return () => clearInterval(interval);
-  }, [params.lotId]);
+  const env = data?.latest?.env;
+  const cold = data?.latest?.cold;
 
-  if (isLoading) {
-    return <main className="p-8">Loading dashboard...</main>;
-  }
-
-  if (!lot) {
-    return <main className="p-8">Lot not found.</main>;
-  }
-
-  const lastPhoto = lot.events.find(e => e.photoUrl)?.photoUrl;
+  const coldSeries = data?.charts?.cold ?? [];
+  const envSeries = data?.charts?.env ?? [];
 
   return (
-    <main className="min-h-screen bg-gray-100 p-8">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Info & Photo */}
-        <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white p-6 rounded-lg shadow">
-                <h1 className="text-3xl font-bold">{lot.product}</h1>
-                <p className="text-gray-500">Lot ID: {lot.id}</p>
-                {lot.score && (
-                    <div className={`mt-4 p-2 rounded text-center font-bold ${getScoreColor(lot.score.freshness)}`}>
-                        Freshness: {lot.score.freshness} ({lot.score.breaches} breaches)
-                    </div>
-                )}
-            </div>
-            {lastPhoto && (
-                <div className="bg-white p-6 rounded-lg shadow">
-                    <h2 className="text-xl font-semibold mb-2">Last Scan Photo</h2>
-                    <img src={lastPhoto} alt="Last pack scan" className="rounded-lg w-full" />
-                </div>
-            )}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Dashboard — Lot {lotId}</h1>
+        <button
+          onClick={capture}
+          disabled={busy}
+          className="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm disabled:opacity-60"
+        >
+          {busy ? "Capturing…" : "Capture Image"}
+        </button>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        <div className="col-span-2 rounded border border-zinc-800 p-3">
+          <h2 className="font-medium mb-2">Last Capture</h2>
+          {data?.lastPhoto ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.lastPhoto}
+              alt="last capture"
+              className="w-full rounded-md object-cover"
+            />
+          ) : (
+            <p className="text-sm text-zinc-400">
+              No image yet. Click “Capture Image”.
+            </p>
+          )}
         </div>
-        
-        {/* Right Column: Charts & Timeline */}
-        <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white p-6 rounded-lg shadow">
-                <h2 className="text-xl font-semibold mb-2">Cold-Chain Telemetry</h2>
-                <TempChart data={lot.telemetry.filter(t => t.kind === 'cold')} />
-            </div>
-             <div className="bg-white p-6 rounded-lg shadow">
-                <h2 className="text-xl font-semibold mb-2">Event Timeline</h2>
-                <ul className="space-y-2">
-                    {lot.events.map(event => (
-                        <li key={event.id} className="border-b py-2">
-                            <strong>{event.type}</strong> - {new Date(event.ts).toLocaleString()}
-                            {event.type === 'GATE_SCAN' && (
-                                <span className={`ml-2 px-2 py-1 text-xs rounded ${event.labelOk ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-                                    Label {event.labelOk ? 'OK' : 'Mismatch'}
-                                </span>
-                            )}
-                        </li>
-                    ))}
-                </ul>
-            </div>
+        <div className="rounded border border-zinc-800 p-3 space-y-2">
+          <h2 className="font-medium mb-2">Live Telemetry</h2>
+          <div className="text-sm">
+            Ambient: <b>{env?.temp ?? "—"}°C</b>, <b>{env?.hum ?? "—"}%</b>
+          </div>
+          <div className="text-sm">
+            Cold box: <b>{cold?.temp ?? "—"}°C</b>
+          </div>
+          <div className="text-sm">
+            Freshness: <b>{data?.freshness?.grade ?? "N/A"}</b>
+          </div>
         </div>
       </div>
-    </main>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <MiniChart
+          title="Cold Temperature (last 60)"
+          data={coldSeries.map((d: any) => d.temp)}
+          min={0}
+          max={12}
+        />
+        <MiniChart
+          title="Ambient Temp (last 60)"
+          data={envSeries.map((d: any) => d.temp)}
+          min={20}
+          max={35}
+        />
+      </div>
+
+      <div className="rounded border border-zinc-800 p-3">
+        <h2 className="font-medium mb-2">Recent Events</h2>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-zinc-400">
+              <th className="text-left py-1">Time</th>
+              <th className="text-left">Type</th>
+              <th className="text-left">Meta</th>
+              <th className="text-left">Photo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data?.events ?? []).reverse().map((e: any, i: number) => (
+              <tr key={i} className="border-t border-zinc-800">
+                <td className="py-1">{new Date(e.ts).toLocaleString()}</td>
+                <td>{e.type}</td>
+                <td>{e.meta ?? ""}</td>
+                <td>
+                  {e.photoUrl ? (
+                    <a
+                      className="text-emerald-400 hover:underline"
+                      href={e.photoUrl}
+                      target="_blank"
+                    >
+                      open
+                    </a>
+                  ) : (
+                    "-"
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function MiniChart({
+  title,
+  data,
+  min,
+  max,
+}: {
+  title: string;
+  data: number[];
+  min: number;
+  max: number;
+}) {
+  const w = 520,
+    h = 140,
+    pad = 20;
+  const pts = data
+    .map((v, i) => {
+      const x = pad + (i / Math.max(1, data.length - 1)) * (w - 2 * pad);
+      const y = pad + (1 - (v - min) / (max - min)) * (h - 2 * pad);
+      return `${x},${y}`;
+    })
+    .join(" ");
+  return (
+    <div className="rounded border border-zinc-800 p-3">
+      <div className="text-sm mb-2">{title}</div>
+      <svg width={w} height={h}>
+        <rect
+          x="0"
+          y="0"
+          width={w}
+          height={h}
+          fill="#0a0a0a"
+          stroke="#27272a"
+        />
+        {data.length > 1 && (
+          <polyline points={pts} fill="none" stroke="#22c55e" strokeWidth="2" />
+        )}
+      </svg>
+    </div>
   );
 }

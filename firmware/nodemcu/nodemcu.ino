@@ -5,18 +5,18 @@
 #include <DallasTemperature.h>
 #include "DHT.h"
 
-#define WIFI_SSID     "YOUR_SSID"
-#define WIFI_PASS     "YOUR_PASS"
+#define WIFI_SSID "meti"
+#define WIFI_PASS "12345678"
 
-#define PIN_DHT       D4          // GPIO2
+#define PIN_DHT       2     // D4
 #define DHTTYPE       DHT11
-#define PIN_ONEWIRE   D2          // GPIO4
-#define PIN_TRIG      D5          // GPIO14
-#define PIN_ECHO      D6          // GPIO12 (via voltage divider!)
-#define PIN_PIR       D7          // GPIO13
+#define PIN_ONEWIRE   4     // D2
+#define PIN_TRIG      14    // D5
+#define PIN_ECHO      12    // D6
+#define PIN_PIR       13    // D7
 
 const char* ESP32CAM_HOST = "http://192.168.1.50";    // <-- set ESP32-CAM IP
-const char* API_BASE      = "http://192.168.1.100:3000"; // Next.js dev server
+const char* API_BASE      = "http://10.36.70.95:3000"; // Next.js dev server
 const char* LOT_ID        = "L2409A";
 
 DHT dht(PIN_DHT, DHTTYPE);

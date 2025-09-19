@@ -1,36 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-import { calculateFreshnessScore } from '@/lib/freshness';
+import { NextRequest, NextResponse } from "next/server";
+import { ensureLot, lotPaths, appendJSONL } from "../_lib/fsdb";
 
-const prisma = new PrismaClient();
+export const runtime = "nodejs";
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { lotId, kind, temp, hum } = body;
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const lotId = String(body.lotId || "UNKNOWN");
+  const type = String(body.type || "");
+  await ensureLot(lotId);
+  const lp = lotPaths(lotId);
 
-    if (!lotId || !kind) {
-      return NextResponse.json({ error: 'Missing lotId or kind' }, { status: 400 });
-    }
+  const row = { ...body, ts: new Date().toISOString() };
 
-    // 1. Save telemetry data
-    await prisma.telemetry.create({
-      data: {
-        lotId,
-        kind,
-        temp: temp ? parseFloat(temp) : null,
-        hum: hum ? parseFloat(hum) : null,
-      },
-    });
-    
-    // 2. Recalculate and update the freshness score
-    if (kind === 'cold') { // Only recalculate for cold-chain data
-        await calculateFreshnessScore(lotId);
-    }
+  if (type === "line_env") await appendJSONL(lp.lineEnv, row);
+  else if (type === "cold") await appendJSONL(lp.cold, row);
+  else
+    await appendJSONL(lp.events, { lotId, type: `TELEM_${type}`, ts: row.ts });
 
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('API Telemetry Error:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
-  }
+  return NextResponse.json({ ok: true });
 }
